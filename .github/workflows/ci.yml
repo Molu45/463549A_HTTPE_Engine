@@ -18,12 +18,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pydantic pytest python-dateutil
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Execute High-Throughput Test Suite
         run: |
-          python -m pytest tests/ -v || echo "Tests will pass once test files are committed"
+          python -m pytest tests/ -v
 
       - name: Execute Production CLI Runner
         run: |
-          if [ -f main.py ]; then python main.py; else echo "main.py will be executed once committed"; fi
+          python main.py
