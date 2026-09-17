@@ -1,3 +1,17 @@
+# PayScale HTTPE — High-Throughput Transaction Processing Engine
+[![HTTPE Engine Automated Verification Pipeline](https://github.com/ZethetaIntern/463549A_HTTPE_Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/ZethetaIntern/463549A_HTTPE_Engine/actions)
+
+**Architecture:** Distributed Ledger Engine | CockroachDB Multi-AZ | Apache Kafka (36 Partitions) | Redis Redlock  
+**Performance Target:** 12,000+ Sustained TPS | P99 Latency < 100ms | Zero Balance Drift Invariant  
+
+---
+
+## Automated Verification & CI Status
+- **Test Suite:** `tests/test_engine.py` (Idempotency & Conservation of Balance)
+- **CI Pipeline:** Active via `.github/workflows/ci.yml`
+- **CLI Benchmark:** Run `python main.py` (Generates 12,000+ synthetic transactions, verifies Raft shard distribution)
+- **Operations Dashboard:** Open `dashboard/index.html` (Interactive load, burst, and multi-AZ chaos simulation)
+- 
 # High-Throughput Transaction Processing Engine (HTTPE)
 **Target:** 12,000+ Sustained TPS Architecture Redesign  
 **Client/Context:** PayScale Financial Technologies (Diwali Surge Simulation)  
