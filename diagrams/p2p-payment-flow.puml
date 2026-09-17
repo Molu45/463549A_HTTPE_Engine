@@ -1,0 +1,57 @@
+@startuml
+autonumber
+skinparam responseMessageBelowArrow true
+
+actor "User App" as Client
+participant "API Gateway\n(Kong)" as Gateway
+participant "Payment Service\n(Go)" as PaymentSvc
+participant "Redis Cluster" as Redis
+participant "Fraud Service" as FraudSvc
+participant "Apache Kafka" as Kafka
+participant "Saga Orchestrator" as Orchestrator
+database "CockroachDB\n(Sharded)" as DB
+participant "Notification Service" as Notify
+
+== Step 1: Ingress & Validation ==
+Client -> Gateway: POST /v1/payments (Idempotency-Key, JWT, Payload)
+Gateway -> Gateway: Validate TLS, JWT & Token Bucket Rate Limit
+Gateway -> PaymentSvc: Forward authorized request
+
+== Step 2: Idempotency & Pre-flight Checks ==
+PaymentSvc -> Redis: SETNX idempotency:{key} PENDING EX 86400
+alt Key Already Exists (Duplicate Retry)
+    Redis --> PaymentSvc: Exists (Return cached response or In-Flight)
+    PaymentSvc --> Client: 200 OK (Previous Result) / 409 Conflict
+end
+Redis --> PaymentSvc: Key Acquired (OK)
+
+PaymentSvc -> FraudSvc: Validate Risk (sync SLA < 15ms)
+alt Fraud Rule Breached
+    FraudSvc --> PaymentSvc: REJECTED (High Risk)
+    PaymentSvc -> DB: Log Failed Transaction (REJECTED_FRAUD)
+    PaymentSvc --> Client: 403 Forbidden (Fraud Check Failed)
+end
+FraudSvc --> PaymentSvc: APPROVED
+
+== Step 3: Event Ingestion (Outbox Pattern) ==
+PaymentSvc -> Kafka: Publish 'txn.initiated' (account_id key)
+Kafka --> PaymentSvc: ACK (acks=all)
+PaymentSvc --> Client: 202 Accepted (Transaction In-Process, txn_id)
+
+== Step 4: Saga Execution & Balance Updates ==
+Kafka -> Orchestrator: Consume 'txn.initiated'
+Orchestrator -> DB: Begin Distributed Sub-Transaction
+Orchestrator -> DB: Debit Sender (OCC: version = version + 1 WHERE balance >= amount)
+alt Insufficient Balance / Version Mismatch
+    DB --> Orchestrator: Abort (Zero Rows Affected)
+    Orchestrator -> Kafka: Publish 'txn.failed' (Reason: Insufficient Balance)
+    Kafka -> Notify: Trigger Failure Push/SMS
+else Debit Succeeded
+    DB --> Orchestrator: Debit Confirmed
+    Orchestrator -> DB: Credit Receiver (version = version + 1)
+    Orchestrator -> DB: Insert Double-Entry Ledger Records
+    DB --> Orchestrator: Commit Succeeded
+    Orchestrator -> Kafka: Publish 'txn.completed'
+    Kafka -> Notify: Push Success Event to Client & Receiver
+end
+@enduml

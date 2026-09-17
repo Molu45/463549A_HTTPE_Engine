@@ -1,0 +1,38 @@
+@startuml
+autonumber
+skinparam responseMessageBelowArrow true
+
+actor "Scheduler / Merchant Portal" as Cron
+participant "Settlement Service" as SettleSvc
+participant "Redis Cluster" as Redis
+database "CockroachDB\n(Transactional)" as DB
+participant "Banking Partner Switch\n(NPCI / Host)" as BankSwitch
+participant "Audit Service" as Audit
+
+== Step 1: Batch Assembly ==
+Cron -> SettleSvc: Trigger Batch Settlement (cutoff window)
+SettleSvc -> Redis: Acquire Lock 'lock:settlement:batch' (TTL 300s)
+SettleSvc -> DB: Query unsettled merchant transactions (LIMIT 100,000)
+DB --> SettleSvc: Return chunked batch payload
+
+== Step 2: Reconciliation & Escrow Lock ==
+SettleSvc -> DB: Update txn status to 'SETTLING' (Hold ledger locks)
+SettleSvc -> SettleSvc: Compute net payout, MDR fee & TDS deductions
+
+== Step 3: External Interbank Transfer ==
+loop In Chunks of 1,000 txns
+    SettleSvc -> BankSwitch: ISO 8583 / REST Payout Request
+    alt Bank Switch Timeout (>30s)
+        BankSwitch --> SettleSvc: 504 Gateway Timeout
+        SettleSvc -> SettleSvc: Trigger Query Status Polling / Reversal
+    else Settlement Success
+        BankSwitch --> SettleSvc: Payout Confirmed (UTR Number)
+    end
+end
+
+== Step 4: Final Ledger Posting & Audit ==
+SettleSvc -> DB: Mark merchant_settlements 'COMPLETED'
+SettleSvc -> DB: Write double-entry Escrow-to-Nodal bank entries
+SettleSvc -> Audit: Stream Settlement Manifest to WORM S3
+SettleSvc -> Redis: Release 'lock:settlement:batch'
+@enduml

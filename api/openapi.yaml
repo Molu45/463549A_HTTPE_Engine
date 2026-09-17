@@ -1,0 +1,313 @@
+openapi: 3.0.3
+info:
+  title: PayScale High-Throughput Transaction Processing Engine (HTTPE) API
+  version: 1.0.0
+  description: Production-grade REST/gRPC API specification handling 12,000+ sustained TPS with strict idempotency, token-bucket rate limiting, and RBI compliance.
+servers:
+  - url: https://api.payscale.internal/v1
+    description: Production API Gateway (Internal VPC / mTLS)
+  - url: https://sandbox.payscale.internal/v1
+    description: Staging / Sandbox Cluster
+
+security:
+  - BearerAuth: []
+
+paths:
+  /payments:
+    post:
+      summary: Initiate a P2P or Merchant Payment
+      description: Ingress endpoint for initiating payment transactions. Enforces strict idempotency and async Saga event ingestion.
+      operationId: initiatePayment
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Client-generated unique UUIDv7 (valid for 24 hours) to prevent double-spending.
+          schema:
+            type: string
+            format: uuid
+            example: "018f2d5e-7a1b-789a-bcde-0123456789ab"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+      responses:
+        '202':
+          description: Transaction accepted for asynchronous processing.
+          headers:
+            X-RateLimit-Limit:
+              schema:
+                type: integer
+              description: Permitted requests per minute window.
+            X-RateLimit-Remaining:
+              schema:
+                type: integer
+              description: Remaining allowed requests in active window.
+            X-RateLimit-Reset:
+              schema:
+                type: integer
+              description: Unix epoch seconds until window resets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentAcceptedResponse'
+        '200':
+          description: Previously completed transaction returned from idempotency cache.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCompletedResponse'
+        '400':
+          description: Bad request (validation error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (risk/fraud rules violated).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict (transaction with this idempotency key is already in flight).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded (Token bucket depleted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable (circuit breaker tripped).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /payments/{transaction_id}:
+    get:
+      summary: Retrieve Transaction Status
+      description: Polls the terminal state of a transaction by ID.
+      operationId: getPaymentStatus
+      parameters:
+        - name: transaction_id
+          in: path
+          required: true
+          description: Unique identifier of the transaction.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current transaction state details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCompletedResponse'
+        '404':
+          description: Transaction not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /accounts/{account_id}/balance:
+    get:
+      summary: Query Account Balances
+      description: Returns available and ledger balances along with active version vector for optimistic locking.
+      operationId: getAccountBalance
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Balance details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBalanceResponse'
+        '404':
+          description: Account not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /settlements/batches:
+    post:
+      summary: Trigger Merchant Cutoff Settlement Batch
+      description: Initiates batch reconciliation and payouts for unsettled merchant transactions.
+      operationId: triggerSettlementBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementBatchRequest'
+      responses:
+        '202':
+          description: Settlement batch queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementBatchResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    PaymentRequest:
+      type: object
+      required:
+        - source_account_id
+        - destination_account_id
+        - amount
+        - currency
+      properties:
+        source_account_id:
+          type: string
+          format: uuid
+          example: "018f2d5e-7a1b-789a-bcde-0123456789aa"
+        destination_account_id:
+          type: string
+          format: uuid
+          example: "018f2d5e-7a1b-789a-bcde-0123456789bb"
+        amount:
+          type: number
+          format: double
+          minimum: 1.00
+          maximum: 500000.00
+          example: 2500.50
+        currency:
+          type: string
+          enum: [INR]
+          default: INR
+        metadata:
+          type: object
+          additionalProperties: true
+
+    PaymentAcceptedResponse:
+      type: object
+      properties:
+        transaction_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: "INITIATED"
+        saga_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    PaymentCompletedResponse:
+      type: object
+      properties:
+        transaction_id:
+          type: string
+          format: uuid
+        idempotency_key:
+          type: string
+        status:
+          type: string
+          enum: [INITIATED, PROCESSING, COMPLETED, FAILED, REVERSED]
+        source_account_id:
+          type: string
+          format: uuid
+        destination_account_id:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        completed_at:
+          type: string
+          format: date-time
+        failure_reason:
+          type: string
+          nullable: true
+
+    AccountBalanceResponse:
+      type: object
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        currency:
+          type: string
+        available_balance:
+          type: number
+          format: double
+        ledger_balance:
+          type: number
+          format: double
+        version:
+          type: integer
+        status:
+          type: string
+          enum: [ACTIVE, FROZEN, CLOSED]
+
+    SettlementBatchRequest:
+      type: object
+      required:
+        - cutoff_timestamp
+      properties:
+        cutoff_timestamp:
+          type: string
+          format: date-time
+        merchant_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    SettlementBatchResponse:
+      type: object
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: "QUEUED"
+        queued_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required:
+        - error_code
+        - message
+        - timestamp
+      properties:
+        error_code:
+          type: string
+          example: "ERR_INSUFFICIENT_FUNDS"
+        message:
+          type: string
+          example: "Available balance is insufficient for debit transaction."
+        timestamp:
+          type: string
+          format: date-time
+        trace_id:
+          type: string
+          example: "trace-018f2d5e7a1b789abcde"

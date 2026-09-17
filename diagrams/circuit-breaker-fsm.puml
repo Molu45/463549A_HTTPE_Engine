@@ -1,0 +1,30 @@
+@startuml
+skinparam state {
+  BackgroundColor<<CLOSED>> LightGreen
+  BackgroundColor<<OPEN>> LightCoral
+  BackgroundColor<<HALF_OPEN>> LightYellow
+}
+
+[*] --> CLOSED : Initialize Service
+
+state CLOSED <<CLOSED>> {
+  CLOSED : Requests passed to protected service
+  CLOSED : Failure count = 0
+}
+
+state OPEN <<OPEN>> {
+  OPEN : Requests immediately short-circuited
+  OPEN : Fallback method invoked
+  OPEN : Timer running (15s - 60s cooldown)
+}
+
+state HALF_OPEN <<HALF_OPEN>> {
+  HALF_OPEN : Probe trial requests allowed
+  HALF_OPEN : Test downstream service recovery
+}
+
+CLOSED --> OPEN : Failure Threshold Breached\n(e.g., 3 failures / 10s)
+OPEN --> HALF_OPEN : Recovery Timeout Elapsed\n(Reset timeout expired)
+HALF_OPEN --> OPEN : Probe Request Fails\n(Re-trip breaker)
+HALF_OPEN --> CLOSED : Probe Requests Succeed\n(System healthy)
+@enduml

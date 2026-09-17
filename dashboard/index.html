@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PayScale HTTPE — Distributed Engine Ops Center & Simulator</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #070b14;
+      --panel: #0f172a;
+      --panel-border: #1e293b;
+      --accent: #00f0ff;
+      --accent-green: #10b981;
+      --accent-red: #ef4444;
+      --accent-orange: #f59e0b;
+      --text: #f8fafc;
+      --text-dim: #94a3b8;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+
+    .navbar { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--panel-border); padding-bottom: 16px; margin-bottom: 20px; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-icon { width: 40px; height: 40px; background: linear-gradient(135deg, #00f0ff, #3b82f6); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+    .status-badge { display: flex; align-items: center; gap: 8px; background: rgba(16, 185, 129, 0.1); color: var(--accent-green); border: 1px solid var(--accent-green); padding: 6px 14px; border-radius: 9999px; font-size: 13px; font-weight: 600; }
+    .pulse { width: 8px; height: 8px; background: var(--accent-green); border-radius: 50%; box-shadow: 0 0 10px var(--accent-green); animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.3); } }
+
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .metric-card { background: var(--panel); border: 1px solid var(--panel-border); padding: 16px; border-radius: 10px; border-top: 3px solid var(--accent); }
+    .metric-title { font-size: 11px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric-val { font-size: 26px; font-weight: 800; margin-top: 6px; color: #fff; }
+    .metric-sub { font-size: 11px; color: var(--accent-green); margin-top: 4px; }
+
+    .control-deck { background: var(--panel); border: 1px solid var(--panel-border); padding: 16px; border-radius: 10px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { padding: 9px 16px; border-radius: 6px; border: none; font-weight: 700; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+    .btn-primary { background: linear-gradient(135deg, #00f0ff, #0284c7); color: #000; }
+    .btn-burst { background: linear-gradient(135deg, #f59e0b, #dc2626); color: #fff; }
+    .btn-chaos { background: #1f2937; color: #f87171; border: 1px solid #ef4444; }
+    .btn-stop { background: #1f2937; color: var(--text-dim); }
+    button:hover { transform: translateY(-1px); opacity: 0.95; }
+
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+    @media (max-width: 960px) { .charts-grid { grid-template-columns: 1fr; } }
+    .chart-box { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 16px; height: 280px; }
+
+    .interactive-grid { display: grid; grid-template-columns: 1fr 1.2fr; gap: 16px; margin-bottom: 20px; }
+    @media (max-width: 960px) { .interactive-grid { grid-template-columns: 1fr; } }
+
+    .form-box { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 16px; }
+    .form-group { margin-bottom: 10px; }
+    .form-group label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; }
+    .form-group input { width: 100%; background: #070b14; border: 1px solid var(--panel-border); color: #fff; padding: 8px 10px; border-radius: 6px; font-size: 12px; }
+
+    .topology-box { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 16px; }
+    .shards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .shard-node { background: #070b14; border: 1px solid #1e293b; padding: 10px; border-radius: 6px; font-size: 11px; border-left: 3px solid var(--accent-green); }
+    .shard-node.fault { border-left-color: var(--accent-red); background: rgba(239, 68, 68, 0.08); }
+
+    .terminal-box { background: #000; border: 1px solid var(--panel-border); border-radius: 10px; padding: 14px; font-family: monospace; font-size: 11px; height: 160px; overflow-y: auto; }
+    .tx-row { display: flex; justify-content: space-between; margin-bottom: 3px; border-bottom: 1px dashed #111827; padding-bottom: 2px; }
+  </style>
+</head>
+<body>
+
+  <div class="navbar">
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <div>
+        <h2 style="margin: 0; font-size: 18px;">PayScale HTTPE Ops & Simulation Center</h2>
+        <small style="color: var(--text-dim);">CockroachDB Multi-AZ + Apache Kafka 36-Partitions + Redis Redlock</small>
+      </div>
+    </div>
+    <div class="status-badge">
+      <div class="pulse"></div>
+      <span id="cluster-status-txt">CLUSTER ONLINE (RPO = 0)</span>
+    </div>
+  </div>
+
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-title">Throughput</div>
+      <div class="metric-val" id="tps-val" style="color: var(--accent);">0 TPS</div>
+      <div class="metric-sub">Sustained Target: 12,000</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Total Settled</div>
+      <div class="metric-val" id="total-val">0</div>
+      <div class="metric-sub">OCC Version Verified</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">p99 Latency</div>
+      <div class="metric-val" id="p99-val" style="color: #c084fc;">0.0 ms</div>
+      <div class="metric-sub">Budget: &lt; 100 ms</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Kafka Ingress Lag</div>
+      <div class="metric-val" id="lag-val" style="color: var(--accent-green);">0 msgs</div>
+      <div class="metric-sub">36 Partitions Balanced</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Circuit Breaker</div>
+      <div class="metric-val" id="cb-val" style="color: var(--accent-green);">CLOSED</div>
+      <div class="metric-sub">Failure Rate: 0.00%</div>
+    </div>
+  </div>
+
+  <div class="control-deck">
+    <div class="btn-group">
+      <button class="btn-primary" onclick="start12k()">▶ Start 12k TPS Load</button>
+      <button class="btn-burst" onclick="triggerBurst()">⚡ 18k Peak Burst</button>
+      <button class="btn-chaos" onclick="injectChaos()">⚠ Chaos: Kill AZ-2 Node</button>
+      <button class="btn-stop" onclick="stopEngine()">⏹ Pause</button>
+    </div>
+    <div style="font-size: 12px; color: var(--text-dim);" id="control-hint">
+      Engine State: Idle.
+    </div>
+  </div>
+
+  <div class="charts-grid">
+    <div class="chart-box">
+      <canvas id="tpsChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <canvas id="latencyChart"></canvas>
+    </div>
+  </div>
+
+  <div class="interactive-grid">
+    <div class="form-box">
+      <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--text-dim); margin-bottom: 12px;">
+        Interactive Payment Dispatcher (Live Saga Test)
+      </div>
+      <div class="form-group">
+        <label>Source Account (Shard 01)</label>
+        <input type="text" id="src-acc" value="018f-src-wallet-9901" />
+      </div>
+      <div class="form-group">
+        <label>Destination Account (Shard 03)</label>
+        <input type="text" id="dst-acc" value="018f-dst-merchant-4420" />
+      </div>
+      <div class="form-group">
+        <label>Amount (INR)</label>
+        <input type="number" id="amt-input" value="1250.00" />
+      </div>
+      <button class="btn-primary" style="width: 100%; margin-top: 6px;" onclick="dispatchSingleTx()">
+        Submit Payment with Idempotency Key
+      </button>
+    </div>
+
+    <div class="topology-box">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--text-dim);">Storage Topology & Raft Range Health</span>
+        <span style="font-size: 11px; color: var(--accent-green);">12 / 12 Nodes Online</span>
+      </div>
+      <div class="shards-grid">
+        <div class="shard-node" id="n1"><b>Shard 01 (Mumbai AZ-1)</b><br><small>Raft Leader • 3,024 TPS</small></div>
+        <div class="shard-node" id="n2"><b>Shard 02 (Mumbai AZ-2)</b><br><small>Raft Leader • 3,018 TPS</small></div>
+        <div class="shard-node" id="n3"><b>Shard 03 (Mumbai AZ-3)</b><br><small>Raft Leader • 3,040 TPS</small></div>
+        <div class="shard-node" id="n4"><b>Shard 04 (Mumbai AZ-1)</b><br><small>Raft Leader • 2,980 TPS</small></div>
+      </div>
+      <div style="margin-top: 14px; font-size: 11px; color: var(--text-dim); line-height: 1.5;">
+        • <b>OCC Invariant:</b> Monotonic version check prevents concurrent balance overwrite.<br>
+        • <b>Data Sovereignty:</b> Stored exclusively in AWS Mumbai (ap-south-1) under RBI directives.
+      </div>
+    </div>
+  </div>
+
+  <div class="terminal-box" id="terminal-stream">
+    <div style="color: #64748b;">// Distributed Event Bus (Apache Kafka + Debezium CDC) Listening...</div>
+  </div>
+
+  <script>
+    let active = false;
+    let targetTPS = 12100;
+    let currentTPS = 0;
+    let totalTx = 0;
+    let chaos = false;
+
+    const tpsCtx = document.getElementById('tpsChart').getContext('2d');
+    const tpsChart = new Chart(tpsCtx, {
+      type: 'line',
+      data: {
+        labels: Array(25).fill(''),
+        datasets: [{
+          label: 'Throughput (TPS)',
+          data: Array(25).fill(0),
+          borderColor: '#00f0ff',
+          backgroundColor: 'rgba(0, 240, 255, 0.08)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { min: 0, max: 22000, grid: { color: '#1e293b' }, ticks: { color: '#64748b' } }, x: { grid: { display: false } } },
+        plugins: { legend: { labels: { color: '#94a3b8' } } }
+      }
+    });
+
+    const latCtx = document.getElementById('latencyChart').getContext('2d');
+    const latencyChart = new Chart(latCtx, {
+      type: 'line',
+      data: {
+        labels: Array(25).fill(''),
+        datasets: [
+          { label: 'p99 Latency (ms)', data: Array(25).fill(0), borderColor: '#c084fc', borderWidth: 2, tension: 0.3 },
+          { label: 'p50 Latency (ms)', data: Array(25).fill(0), borderColor: '#10b981', borderWidth: 1.5, borderDash: [4, 4], tension: 0.3 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { min: 0, max: 140, grid: { color: '#1e293b' }, ticks: { color: '#64748b' } }, x: { grid: { display: false } } },
+        plugins: { legend: { labels: { color: '#94a3b8' } } }
+      }
+    });
+
+    function logTerm(msg, type = 'normal') {
+      const box = document.getElementById('terminal-stream');
+      const row = document.createElement('div');
+      row.className = 'tx-row';
+      const color = type === 'alert' ? '#ef4444' : (type === 'custom' ? '#f59e0b' : '#34d399');
+      row.innerHTML = `<span style="color: ${color}">[${new Date().toISOString().substring(11, 19)}]</span> <span>${msg}</span>`;
+      box.prepend(row);
+      if (box.children.length > 30) box.removeChild(box.lastChild);
+    }
+
+    function tick() {
+      if (!active) return;
+
+      const jitter = Math.floor(Math.random() * 400) - 200;
+      currentTPS = Math.max(0, targetTPS + jitter);
+      totalTx += currentTPS;
+
+      document.getElementById('tps-val').innerText = currentTPS.toLocaleString() + ' TPS';
+      document.getElementById('total-val').innerText = totalTx.toLocaleString();
+
+      let p99 = (26 + (currentTPS / 1000) * 2.3 + Math.random() * 3).toFixed(1);
+      let p50 = (10 + (currentTPS / 1000) * 0.4).toFixed(1);
+      if (chaos) { p99 = (parseFloat(p99) + 48.0).toFixed(1); p50 = (parseFloat(p50) + 15.0).toFixed(1); }
+
+      document.getElementById('p99-val').innerText = p99 + ' ms';
+      document.getElementById('lag-val').innerText = (chaos ? '4,812 msgs' : (currentTPS > 15000 ? '1,120 msgs' : '14 msgs'));
+
+      tpsChart.data.datasets[0].data.shift();
+      tpsChart.data.datasets[0].data.push(currentTPS);
+      tpsChart.update('none');
+
+      latencyChart.data.datasets[0].data.shift();
+      latencyChart.data.datasets[0].data.push(p99);
+      latencyChart.data.datasets[1].data.shift();
+      latencyChart.data.datasets[1].data.push(p50);
+      latencyChart.update('none');
+
+      if (Math.random() > 0.6) {
+        logTerm(`Saga Batch committed ${Math.floor(currentTPS / 10)} cross-shard transfers. OCC versions incremented.`);
+      }
+    }
+
+    function start12k() {
+      active = true;
+      targetTPS = 12100;
+      chaos = false;
+      document.getElementById('control-hint').innerText = 'Running: Sustained 12,000+ TPS mode.';
+      document.getElementById('cb-val').innerText = 'CLOSED';
+      document.getElementById('cb-val').style.color = 'var(--accent-green)';
+    }
+
+    function triggerBurst() {
+      if (!active) start12k();
+      targetTPS = 18450;
+      document.getElementById('control-hint').innerText = 'ALERT: Peak Flash Sale Traffic Injected (18k TPS)!';
+      setTimeout(() => {
+        if (active && !chaos) {
+          targetTPS = 12100;
+          document.getElementById('control-hint').innerText = 'Burst drained into Kafka. Resumed 12k TPS.';
+        }
+      }, 7000);
+    }
+
+    function injectChaos() {
+      if (!active) start12k();
+      chaos = true;
+      const n2 = document.getElementById('n2');
+      n2.className = 'shard-node fault';
+      n2.innerHTML = '<b>Shard 02 (AZ-2)</b><br><small style="color: #ef4444">NODE DOWN (Simulated Kill)</small>';
+      document.getElementById('cb-val').innerText = 'HALF-OPEN';
+      document.getElementById('cb-val').style.color = 'var(--accent-orange)';
+      document.getElementById('control-hint').innerText = 'Chaos Injected: Raft quorum transferring leaseholder...';
+      logTerm('CRITICAL: Shard 02 leaseholder lost. Triggering fast Raft election...', 'alert');
+
+      setTimeout(() => {
+        n2.className = 'shard-node';
+        n2.innerHTML = '<b>Shard 02 (AZ-3 Standby)</b><br><small>Elected Leaseholder • Healthy</small>';
+        document.getElementById('cb-val').innerText = 'CLOSED';
+        document.getElementById('cb-val').style.color = 'var(--accent-green)';
+        document.getElementById('control-hint').innerText = 'Raft consensus recovered under 3 seconds. RTO target met.';
+        logTerm('RECOVERED: New leaseholder active. Circuit breaker closed.', 'normal');
+        chaos = false;
+      }, 4000);
+    }
+
+    function dispatchSingleTx() {
+      const src = document.getElementById('src-acc').value;
+      const dst = document.getElementById('dst-acc').value;
+      const amt = parseFloat(document.getElementById('amt-input').value) || 100.0;
+      const key = '018f-' + Math.random().toString(16).substr(2, 8);
+      logTerm(`[DISPATCH] TX ${key}: Debit INR ${amt.toFixed(2)} from ${src} -> Credit ${dst} (Saga Orchestrated)`, 'custom');
+      totalTx += 1;
+      document.getElementById('total-val').innerText = totalTx.toLocaleString();
+    }
+
+    function stopEngine() {
+      active = false;
+      document.getElementById('tps-val').innerText = '0 TPS';
+      document.getElementById('control-hint').innerText = 'Engine Halted.';
+    }
+
+    setInterval(tick, 1000);
+  </script>
+</body>
+</html>

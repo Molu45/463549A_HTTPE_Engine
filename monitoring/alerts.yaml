@@ -1,0 +1,63 @@
+```yaml
+groups:
+  - name: HTTPE_Core_Alerts
+    rules:
+      - alert: HighTransactionLatencyP99
+        expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job="payment-service"}[2m])) by (le)) > 0.100
+        for: 1m
+        labels:
+          severity: P2
+          team: sre-core
+        annotations:
+          summary: "HTTPE p99 latency breached 100ms SLA"
+          description: "Payment Service p99 latency is currently {{ $value | humanizeDuration }} (threshold: 100ms)."
+
+      - alert: CriticalApiErrorRate
+        expr: (sum(rate(http_requests_total{job="payment-service", status=~"5.."}[1m])) / sum(rate(http_requests_total{job="payment-service"}[1m]))) * 100 > 2.0
+        for: 30s
+        labels:
+          severity: P1
+          team: sre-core
+        annotations:
+          summary: "Payment API 5xx error rate exceeded 2%"
+          description: "System error rate is {{ $value | printf \"%.2f\" }}% under sustained load."
+
+      - alert: KafkaConsumerLagSpike
+        expr: sum(kafka_consumergroup_lag{topic=~"txn.*"}) by (consumergroup) > 5000
+        for: 2m
+        labels:
+          severity: P2
+          team: data-infra
+        annotations:
+          summary: "Kafka consumer group lag critical"
+          description: "Consumer group {{ $labels.consumergroup }} has {{ $value }} unconsumed messages."
+
+      - alert: CircuitBreakerTripped
+        expr: circuit_breaker_state{state="OPEN"} == 1
+        for: 15s
+        labels:
+          severity: P2
+          team: app-platform
+        annotations:
+          summary: "Circuit breaker {{ $labels.name }} is OPEN"
+          description: "Downstream protection tripped. Fallback execution active for {{ $labels.name }}."
+
+      - alert: DeadLetterQueueSpike
+        expr: sum(increase(kafka_topic_messages_in_total{topic="txn.dead.letter.queue"}[5m])) > 10
+        for: 1m
+        labels:
+          severity: P2
+          team: compliance-ops
+        annotations:
+          summary: "Poison messages detected in DLQ"
+          description: "More than 10 transactions routed to Dead Letter Queue in the last 5 minutes."
+
+      - alert: CockroachDBNodeDown
+        expr: sum(up{job="cockroachdb"}) < 12
+        for: 1m
+        labels:
+          severity: P1
+          team: database-ops
+        annotations:
+          summary: "CockroachDB node failure detected"
+          description: "Cluster has {{ $value }} live nodes out of 12 provisioned."

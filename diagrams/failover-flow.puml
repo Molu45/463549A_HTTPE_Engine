@@ -1,0 +1,41 @@
+@startuml
+autonumber
+skinparam responseMessageBelowArrow true
+
+participant "Payment Worker" as App
+participant "PgBouncer Pooler" as Pooler
+participant "CockroachDB Node 1\n(Raft Leaseholder - AZ 1)" as N1
+participant "CockroachDB Node 2\n(Raft Follower - AZ 2)" as N2
+participant "CockroachDB Node 3\n(Raft Follower - AZ 3)" as N3
+
+== Healthy Execution ==
+App -> Pooler: Execute Balance Check / Debit
+Pooler -> N1: Forward write query to current Leaseholder
+N1 -> N2: Replicate WAL via Raft consensus
+N1 -> N3: Replicate WAL via Raft consensus
+N2 --> N1: ACK
+N1 --> Pooler: Commit Confirmed
+Pooler --> App: Success
+
+== Failure Injection: Node 1 Unreachable ==
+N1 x- N1: Sudden Crash / AZ Network Partition
+App -> Pooler: Execute Next Transaction
+Pooler -> N1: Query Timeout (500ms)
+Pooler --> App: Error (Connection Refused / Timeout)
+
+== Automatic Raft Leader Election (<3s) ==
+N2 -> N3: Heartbeat Lost; Trigger Raft Election
+N2 -> N3: RequestVote(term+1)
+N3 --> N2: VoteGranted
+N2 -> N2: Promote to Raft Leaseholder
+
+== System Healing & Retry (RTO < 30s) ==
+Pooler -> Pooler: Detect dead node; update health routing
+App -> App: Retry transaction via exponential backoff
+App -> Pooler: Retry Transaction
+Pooler -> N2: Route write query to NEW Leaseholder
+N2 -> N3: Replicate WAL
+N3 --> N2: ACK
+N2 --> Pooler: Commit Succeeded (Zero Data Loss - RPO=0)
+Pooler --> App: Success Response
+@enduml
